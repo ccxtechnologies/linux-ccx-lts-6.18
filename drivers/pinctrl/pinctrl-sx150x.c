@@ -929,12 +929,7 @@ static int sx150x_init_hw(struct sx150x_pinctrl *pctl)
 			return err;
 	}
 
-	err = sx150x_init_misc(pctl);
-	if (err < 0)
-		return err;
-
-	/* Set all pins to work in normal mode */
-	return regmap_write(pctl->regmap, reg[pctl->data->model], 0);
+	return sx150x_init_misc(pctl);
 }
 
 static int sx150x_regmap_reg_width(struct sx150x_pinctrl *pctl,
@@ -1223,8 +1218,7 @@ static int sx150x_probe(struct i2c_client *client)
 
 		ret = devm_request_threaded_irq(dev, client->irq, NULL,
 						sx150x_irq_thread_fn,
-						IRQF_ONESHOT | IRQF_SHARED |
-						IRQF_TRIGGER_FALLING,
+						IRQF_ONESHOT | IRQF_SHARED,
 						client->name, pctl);
 		if (ret < 0)
 			return ret;

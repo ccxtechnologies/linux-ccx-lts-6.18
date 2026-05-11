@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause OR GPL-2.0-or-later
 /*
  * Copyright 2008 - 2015 Freescale Semiconductor Inc.
+ * Copyright 2026 CCX Technologies
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -650,6 +651,7 @@ static u32 memac_if_mode(phy_interface_t interface)
 	case PHY_INTERFACE_MODE_SGMII:
 	case PHY_INTERFACE_MODE_1000BASEX:
 	case PHY_INTERFACE_MODE_QSGMII:
+    case PHY_INTERFACE_MODE_2500BASEX:
 		return IF_MODE_GMII;
 	case PHY_INTERFACE_MODE_10GBASER:
 		return IF_MODE_10G;
@@ -667,6 +669,7 @@ static struct phylink_pcs *memac_select_pcs(struct phylink_config *config,
 	switch (iface) {
 	case PHY_INTERFACE_MODE_SGMII:
 	case PHY_INTERFACE_MODE_1000BASEX:
+    case PHY_INTERFACE_MODE_2500BASEX:
 		return memac->sgmii_pcs;
 	case PHY_INTERFACE_MODE_QSGMII:
 		return memac->qsgmii_pcs;
@@ -687,6 +690,7 @@ static int memac_prepare(struct phylink_config *config, unsigned int mode,
 	case PHY_INTERFACE_MODE_1000BASEX:
 	case PHY_INTERFACE_MODE_QSGMII:
 	case PHY_INTERFACE_MODE_10GBASER:
+    case PHY_INTERFACE_MODE_2500BASEX:
 		return phy_set_mode_ext(memac->serdes, PHY_MODE_ETHERNET,
 					iface);
 	default:

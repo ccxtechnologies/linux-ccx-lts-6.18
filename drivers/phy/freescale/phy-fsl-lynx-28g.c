@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0+
-/* Copyright (c) 2021-2022 NXP. */
+/* Copyright (c) 2021-2022 NXP.
+ * Copyright (C) 2026 CCX Technologies */
 
 #include <linux/module.h>
 #include <linux/of.h>
@@ -418,6 +419,7 @@ static int lynx_28g_set_mode(struct phy *phy, enum phy_mode mode, int submode)
 	switch (submode) {
 	case PHY_INTERFACE_MODE_SGMII:
 	case PHY_INTERFACE_MODE_1000BASEX:
+    case PHY_INTERFACE_MODE_2500BASEX:
 		lynx_28g_lane_set_sgmii(lane);
 		break;
 	case PHY_INTERFACE_MODE_10GBASER:
@@ -511,6 +513,7 @@ static void lynx_28g_pll_read_configuration(struct lynx_28g_priv *priv)
 			break;
 		default:
 			/* 6GHz, 12.890625GHz, 8GHz */
+			__set_bit(PHY_INTERFACE_MODE_2500BASEX, pll->supported);
 			break;
 		}
 	}

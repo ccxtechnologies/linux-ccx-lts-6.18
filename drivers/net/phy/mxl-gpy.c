@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0+
 /* Copyright (C) 2021 Maxlinear Corporation
  * Copyright (C) 2020 Intel Corporation
+ * Copyright (C) 2026 CCX Technologies
  *
  * Drivers for Maxlinear Ethernet GPY
  *
@@ -99,6 +100,7 @@
 #define VSPEC1_SGMII_CTRL	0x08
 #define VSPEC1_SGMII_CTRL_ANEN	BIT(12)		/* Aneg enable */
 #define VSPEC1_SGMII_CTRL_ANRS	BIT(9)		/* Restart Aneg */
+#define VSPEC1_SGMII_CTRL_FIXED2G5 BIT(5)	/* Force Fixed 2.5G Rate Adaptation */
 #define VSPEC1_SGMII_ANEN_ANRS	(VSPEC1_SGMII_CTRL_ANEN | \
 				 VSPEC1_SGMII_CTRL_ANRS)
 
@@ -289,7 +291,19 @@ out:
 
 static int gpy_config_init(struct phy_device *phydev)
 {
-	/* Nothing to configure. Configuration Requirement Placeholder */
+	int ret;
+
+	/* Enable Fixed 2.5G MAC-to-PHY link if configured for 2500base-x */
+	if (phydev->interface == PHY_INTERFACE_MODE_2500BASEX) {
+		ret = phy_set_bits_mmd(phydev, MDIO_MMD_VEND1, VSPEC1_SGMII_CTRL,
+				       VSPEC1_SGMII_CTRL_FIXED2G5);
+
+		phydev_info(phydev, "Fixed 2.5G SGMII\n");
+
+		if (ret < 0)
+			return ret;
+	}
+
 	return 0;
 }
 
@@ -537,9 +551,10 @@ static int gpy_update_interface(struct phy_device *phydev)
 {
 	int ret;
 
-	/* Interface mode is fixed for USXGMII and integrated PHY */
+	/* Interface mode is fixed for USXGMII, integrated PHY, and 2500Base-X */
 	if (phydev->interface == PHY_INTERFACE_MODE_USXGMII ||
-	    phydev->interface == PHY_INTERFACE_MODE_INTERNAL)
+	    phydev->interface == PHY_INTERFACE_MODE_INTERNAL ||
+	    phydev->interface == PHY_INTERFACE_MODE_2500BASEX)
 		return 0;
 
 	/* Automatically switch SERDES interface between SGMII and 2500-BaseX
@@ -1018,6 +1033,20 @@ static int gpy_led_polarity_set(struct phy_device *phydev, int index,
 	return -EINVAL;
 }
 
+static int gpy_get_rate_matching(struct phy_device *phydev,
+				 phy_interface_t iface)
+{
+	/* If the interface is 2500Base-X, the PHY handles rate adaptation
+	 * internally using PAUSE frames. Tell phylink to keep the MAC
+	 * permanently locked at 2.5G.
+	 */
+
+	if (iface == PHY_INTERFACE_MODE_2500BASEX)
+		return RATE_MATCH_PAUSE;
+
+	return RATE_MATCH_NONE;
+}
+
 static struct phy_driver gpy_drivers[] = {
 	{
 		PHY_ID_MATCH_MODEL(PHY_ID_GPY2xx),
@@ -1040,6 +1069,7 @@ static struct phy_driver gpy_drivers[] = {
 		.led_hw_control_get = gpy_led_hw_control_get,
 		.led_hw_control_set = gpy_led_hw_control_set,
 		.led_polarity_set = gpy_led_polarity_set,
+		.get_rate_matching = gpy_get_rate_matching,
 	},
 	{
 		.phy_id		= PHY_ID_GPY115B,
@@ -1063,6 +1093,7 @@ static struct phy_driver gpy_drivers[] = {
 		.led_hw_control_get = gpy_led_hw_control_get,
 		.led_hw_control_set = gpy_led_hw_control_set,
 		.led_polarity_set = gpy_led_polarity_set,
+		.get_rate_matching = gpy_get_rate_matching,
 	},
 	{
 		PHY_ID_MATCH_MODEL(PHY_ID_GPY115C),
@@ -1085,6 +1116,7 @@ static struct phy_driver gpy_drivers[] = {
 		.led_hw_control_get = gpy_led_hw_control_get,
 		.led_hw_control_set = gpy_led_hw_control_set,
 		.led_polarity_set = gpy_led_polarity_set,
+		.get_rate_matching = gpy_get_rate_matching,
 	},
 	{
 		.phy_id		= PHY_ID_GPY211B,
@@ -1108,6 +1140,7 @@ static struct phy_driver gpy_drivers[] = {
 		.led_hw_control_get = gpy_led_hw_control_get,
 		.led_hw_control_set = gpy_led_hw_control_set,
 		.led_polarity_set = gpy_led_polarity_set,
+		.get_rate_matching = gpy_get_rate_matching,
 	},
 	{
 		PHY_ID_MATCH_MODEL(PHY_ID_GPY211C),
@@ -1130,6 +1163,7 @@ static struct phy_driver gpy_drivers[] = {
 		.led_hw_control_get = gpy_led_hw_control_get,
 		.led_hw_control_set = gpy_led_hw_control_set,
 		.led_polarity_set = gpy_led_polarity_set,
+		.get_rate_matching = gpy_get_rate_matching,
 	},
 	{
 		.phy_id		= PHY_ID_GPY212B,
@@ -1153,6 +1187,7 @@ static struct phy_driver gpy_drivers[] = {
 		.led_hw_control_get = gpy_led_hw_control_get,
 		.led_hw_control_set = gpy_led_hw_control_set,
 		.led_polarity_set = gpy_led_polarity_set,
+		.get_rate_matching = gpy_get_rate_matching,
 	},
 	{
 		PHY_ID_MATCH_MODEL(PHY_ID_GPY212C),
@@ -1175,6 +1210,7 @@ static struct phy_driver gpy_drivers[] = {
 		.led_hw_control_get = gpy_led_hw_control_get,
 		.led_hw_control_set = gpy_led_hw_control_set,
 		.led_polarity_set = gpy_led_polarity_set,
+		.get_rate_matching = gpy_get_rate_matching,
 	},
 	{
 		.phy_id		= PHY_ID_GPY215B,
@@ -1198,6 +1234,7 @@ static struct phy_driver gpy_drivers[] = {
 		.led_hw_control_get = gpy_led_hw_control_get,
 		.led_hw_control_set = gpy_led_hw_control_set,
 		.led_polarity_set = gpy_led_polarity_set,
+		.get_rate_matching = gpy_get_rate_matching,
 	},
 	{
 		PHY_ID_MATCH_MODEL(PHY_ID_GPY215C),
@@ -1220,6 +1257,7 @@ static struct phy_driver gpy_drivers[] = {
 		.led_hw_control_get = gpy_led_hw_control_get,
 		.led_hw_control_set = gpy_led_hw_control_set,
 		.led_polarity_set = gpy_led_polarity_set,
+		.get_rate_matching = gpy_get_rate_matching,
 	},
 	{
 		PHY_ID_MATCH_MODEL(PHY_ID_GPY241B),
@@ -1237,6 +1275,7 @@ static struct phy_driver gpy_drivers[] = {
 		.set_wol	= gpy_set_wol,
 		.get_wol	= gpy_get_wol,
 		.set_loopback	= gpy_loopback,
+		.get_rate_matching = gpy_get_rate_matching,
 	},
 	{
 		PHY_ID_MATCH_MODEL(PHY_ID_GPY241BM),
@@ -1254,6 +1293,7 @@ static struct phy_driver gpy_drivers[] = {
 		.set_wol	= gpy_set_wol,
 		.get_wol	= gpy_get_wol,
 		.set_loopback	= gpy_loopback,
+		.get_rate_matching = gpy_get_rate_matching,
 	},
 	{
 		PHY_ID_MATCH_MODEL(PHY_ID_GPY245B),
@@ -1271,6 +1311,7 @@ static struct phy_driver gpy_drivers[] = {
 		.set_wol	= gpy_set_wol,
 		.get_wol	= gpy_get_wol,
 		.set_loopback	= gpy_loopback,
+		.get_rate_matching = gpy_get_rate_matching,
 	},
 };
 module_phy_driver(gpy_drivers);

@@ -295,10 +295,9 @@ static int gpy_config_init(struct phy_device *phydev)
 
 	/* Enable Fixed 2.5G MAC-to-PHY link if configured for 2500base-x */
 	if (phydev->interface == PHY_INTERFACE_MODE_2500BASEX) {
-		ret = phy_set_bits_mmd(phydev, MDIO_MMD_VEND1, VSPEC1_SGMII_CTRL,
-				       VSPEC1_SGMII_CTRL_FIXED2G5);
-
-		phydev_info(phydev, "Fixed 2.5G SGMII\n");
+		ret = phy_modify_mmd(phydev, MDIO_MMD_VEND1, VSPEC1_SGMII_CTRL,
+				VSPEC1_SGMII_CTRL_FIXED2G5 | VSPEC1_SGMII_CTRL_ANEN,
+				VSPEC1_SGMII_CTRL_FIXED2G5);
 
 		if (ret < 0)
 			return ret;

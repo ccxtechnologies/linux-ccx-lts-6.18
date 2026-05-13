@@ -490,7 +490,6 @@ static int dp83867_get_edpd(struct phy_device *phydev, u16 *tx_interval)
 static int dp83867_set_edpd(struct phy_device *phydev, u16 tx_interval)
 {
 	int val;
-	int ret;
 
 	val = phy_read(phydev, MII_DP83867_PHYCTRL);
 	if (val < 0)

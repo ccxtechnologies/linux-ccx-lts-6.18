@@ -443,6 +443,9 @@ static int qc_attach(struct usb_serial *serial)
 	if (sendsetup)
 		data->use_send_setup = 1;
 
+	/* enable ZLP */
+	data->use_zlp = 1;
+
 	spin_lock_init(&data->susp_lock);
 
 	usb_set_serial_data(serial, data);

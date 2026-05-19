@@ -217,6 +217,22 @@ static void caam_jr_remove(struct platform_device *pdev)
 		dev_err(jrdev, "Failed to shut down job ring\n");
 }
 
+/*
+ * Dedicated shutdown callback for system reboot.
+ * Quiesces the hardware ring but deliberately skips unregister_algs()
+ * to prevent reference count panics from lingering userspace processes.
+ */
+static void caam_jr_plat_shutdown(struct platform_device *pdev)
+{
+	struct device *jrdev = &pdev->dev;
+	int ret;
+
+	/* Release hardware ring */
+	ret = caam_jr_shutdown(jrdev);
+	if (ret)
+		dev_err(jrdev, "Failed to shut down job ring during reboot\n");
+}
+
 /* Main per-ring interrupt handler */
 static irqreturn_t caam_jr_interrupt(int irq, void *st_dev)
 {
@@ -819,7 +835,7 @@ static struct platform_driver caam_jr_driver = {
 	},
 	.probe       = caam_jr_probe,
 	.remove      = caam_jr_remove,
-	.shutdown    = caam_jr_remove,
+	.shutdown    = caam_jr_plat_shutdown,
 };
 
 static int __init jr_driver_init(void)

@@ -4,6 +4,7 @@
  *
  * Copyright 2013-2014 Freescale Semiconductor, Inc.
  * Copyright 2024 NXP
+ * Copyright 2026 CCX Technologies
  *
  * Driver for the Freescale eDMA engine with flexible channel multiplexing
  * capability for DMA request sources. The eDMA block can be found on some
@@ -40,6 +41,15 @@ static irqreturn_t fsl_edma_tx_handler(int irq, void *dev_id)
 	intr = edma_readl(fsl_edma, regs->intl);
 	if (!intr)
 		return IRQ_NONE;
+
+	if (fsl_edma->drvdata->flags & FSL_EDMA_DRV_A011218) {
+        struct fsl_edma_engine *edma = fsl_edma;
+
+		if (intr & BIT(EDMA_A011218_RX_CHAN))
+			edma_writeb(edma, EDMA_CINT_CINT(EDMA_A011218_RX_CHAN), regs->cint);
+		if (intr & BIT(EDMA_A011218_TX_CHAN))
+			edma_writeb(edma, EDMA_CINT_CINT(EDMA_A011218_TX_CHAN), regs->cint);
+	}
 
 	for (ch = 0; ch < fsl_edma->n_chans; ch++) {
 		if (intr & (0x1 << ch)) {
@@ -214,6 +224,15 @@ static irqreturn_t fsl_edma_err_handler(int irq, void *dev_id)
 	if (!err)
 		return IRQ_NONE;
 
+	if (fsl_edma->drvdata->flags & FSL_EDMA_DRV_A011218) {
+        struct fsl_edma_engine *edma = fsl_edma;
+
+		if (err & BIT(EDMA_A011218_RX_CHAN))
+			edma_writeb(edma, EDMA_CERR_CERR(EDMA_A011218_RX_CHAN), regs->cerr);
+		if (err & BIT(EDMA_A011218_TX_CHAN))
+			edma_writeb(edma, EDMA_CERR_CERR(EDMA_A011218_TX_CHAN), regs->cerr);
+	}
+
 	for (ch = 0; ch < fsl_edma->n_chans; ch++) {
 		if (err & (0x1 << ch)) {
 			fsl_edma_disable_request(&fsl_edma->chans[ch]);
@@ -264,6 +283,11 @@ static struct dma_chan *fsl_edma_xlate(struct of_phandle_args *dma_spec,
 
 	list_for_each_entry_safe(chan, _chan, &fsl_edma->dma_dev.channels, device_node) {
 		if (chan->client_count)
+			continue;
+
+        /* Prevent the system from allocating our reserved A-011218 shadow channels */
+		if ((fsl_edma->drvdata->flags & FSL_EDMA_DRV_A011218) &&
+		    (chan->chan_id == EDMA_A011218_RX_CHAN || chan->chan_id == EDMA_A011218_TX_CHAN))
 			continue;
 
 		if (fsl_edma_srcid_in_use(fsl_edma, dma_spec->args[1]))
@@ -611,8 +635,17 @@ static const struct fsl_edma_drvdata s32g2_data = {
 	.setup_irq = fsl_edma3_or_irq_init,
 };
 
+static struct fsl_edma_drvdata ls1046a_data = {
+	.dmamuxs = DMAMUX_NR,
+	.flags = FSL_EDMA_DRV_WRAP_IO | FSL_EDMA_DRV_A011218,
+	.chreg_off = EDMA_TCD,
+	.chreg_space_sz = sizeof(struct fsl_edma_hw_tcd),
+	.setup_irq = fsl_edma_irq_init,
+};
+
 static const struct of_device_id fsl_edma_dt_ids[] = {
 	{ .compatible = "fsl,vf610-edma", .data = &vf610_data},
+	{ .compatible = "fsl,ls1046a-edma", .data = &ls1046a_data},
 	{ .compatible = "fsl,ls1028a-edma", .data = &ls1028a_data},
 	{ .compatible = "fsl,imx7ulp-edma", .data = &imx7ulp_data},
 	{ .compatible = "fsl,imx8qm-edma", .data = &imx8qm_data},
@@ -720,6 +753,15 @@ static int fsl_edma_probe(struct platform_device *pdev)
 				GFP_KERNEL);
 	if (!fsl_edma)
 		return -ENOMEM;
+
+	if (drvdata->flags & FSL_EDMA_DRV_A011218) {
+		fsl_edma->dummy_rx = dmam_alloc_coherent(&pdev->dev, 8,
+						&fsl_edma->dummy_rx_phys, GFP_KERNEL);
+		fsl_edma->dummy_tx = dmam_alloc_coherent(&pdev->dev, 8,
+						&fsl_edma->dummy_tx_phys, GFP_KERNEL);
+		if (!fsl_edma->dummy_rx || !fsl_edma->dummy_tx)
+			return -ENOMEM;
+	}
 
 	fsl_edma->errirq = -EINVAL;
 	fsl_edma->txirq = -EINVAL;

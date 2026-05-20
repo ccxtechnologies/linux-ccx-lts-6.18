@@ -2,6 +2,7 @@
 //
 // Copyright 2013 Freescale Semiconductor, Inc.
 // Copyright 2020-2025 NXP
+// Copyright 2026 CCX Technologies
 //
 // Freescale DSPI driver
 // This file contains a driver for the Freescale DSPI
@@ -255,8 +256,7 @@ static const struct fsl_dspi_devtype_data devtype_data[] = {
 		.regmap			= &dspi_regmap_config[DSPI_XSPI_REGMAP],
 	},
 	[LS1012A] = {
-		/* Has A-011218 DMA erratum */
-		.trans_mode		= DSPI_XSPI_MODE,
+		.trans_mode		= DSPI_DMA_MODE,
 		.max_clock_factor	= 8,
 		.fifo_size		= 16,
 		.regmap			= &dspi_regmap_config[DSPI_XSPI_REGMAP],
@@ -275,8 +275,7 @@ static const struct fsl_dspi_devtype_data devtype_data[] = {
 		.regmap			= &dspi_regmap_config[DSPI_XSPI_REGMAP],
 	},
 	[LS1046A] = {
-		/* Has A-011218 DMA erratum */
-		.trans_mode		= DSPI_XSPI_MODE,
+		.trans_mode		= DSPI_DMA_MODE,
 		.max_clock_factor	= 8,
 		.fifo_size		= 16,
 		.regmap			= &dspi_regmap_config[DSPI_XSPI_REGMAP],

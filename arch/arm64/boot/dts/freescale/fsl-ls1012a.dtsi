@@ -384,6 +384,9 @@
 					    QORIQ_CLK_PLL_DIV(1)>;
 			spi-num-chipselects = <5>;
 			big-endian;
+			dma-names = "tx", "rx";
+			dmas = <&edma0 0 62>,
+				<&edma0 0 60>;
 			status = "disabled";
 		};
 

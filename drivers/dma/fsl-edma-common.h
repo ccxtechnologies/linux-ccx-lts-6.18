@@ -2,6 +2,7 @@
 /*
  * Copyright 2013-2014 Freescale Semiconductor, Inc.
  * Copyright 2018 Angelo Dureghello <angelo@sysam.it>
+ * Copyright 2026 CCX Technologies
  */
 #ifndef _FSL_EDMA_COMMON_H_
 #define _FSL_EDMA_COMMON_H_
@@ -225,6 +226,7 @@ struct fsl_edma_desc {
 #define FSL_EDMA_DRV_TCD64		BIT(15)
 /* All channel ERR IRQ share one IRQ line */
 #define FSL_EDMA_DRV_ERRIRQ_SHARE       BIT(16)
+#define FSL_EDMA_DRV_A011218		BIT(17)
 
 
 #define FSL_EDMA_DRV_EDMA3	(FSL_EDMA_DRV_SPLIT_REG |	\
@@ -239,6 +241,12 @@ struct fsl_edma_desc {
 				 FSL_EDMA_DRV_DEV_TO_DEV |	\
 				 FSL_EDMA_DRV_ALIGN_64BYTE |	\
 				 FSL_EDMA_DRV_CLEAR_DONE_E_LINK)
+
+
+#define EDMA_A011218_RX_CHAN	30
+#define EDMA_A011218_TX_CHAN	31
+#define EDMA_A011218_RX_SLOT	60
+#define EDMA_A011218_TX_SLOT	62
 
 struct fsl_edma_drvdata {
 	u32			dmamuxs; /* only used before v3 */
@@ -266,6 +274,13 @@ struct fsl_edma_engine {
 	bool			big_endian;
 	struct edma_regs	regs;
 	u64			chan_masked;
+
+	/* for the A011218 work-around */
+	void			*dummy_rx;
+	dma_addr_t		dummy_rx_phys;
+	void			*dummy_tx;
+	dma_addr_t		dummy_tx_phys;
+
 	struct fsl_edma_chan	chans[] __counted_by(n_chans);
 };
 

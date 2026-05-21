@@ -425,7 +425,7 @@ static inline u16 edma_readw(struct fsl_edma_engine *edma, void __iomem *addr)
 	u16 val;
 
 	if (edma->big_endian)
-		val = ioread16be(addr);
+        	val = ioread16be((void __iomem *)((unsigned long)addr ^ 0x2));
 	else
 		val = ioread16(addr);
 

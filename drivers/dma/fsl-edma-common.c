@@ -426,6 +426,20 @@ enum dma_status fsl_edma_tx_status(struct dma_chan *chan,
 static void fsl_edma_set_tcd_regs(struct fsl_edma_chan *fsl_chan, void *tcd)
 {
 	u16 csr = 0;
+	struct fsl_edma_chan *dummy_chan = NULL;
+	dma_addr_t dummy_phys = 0;
+
+	if (fsl_chan->edma->drvdata->flags & FSL_EDMA_DRV_A011218) {
+		if (fsl_chan->srcid == EDMA_A011218_RX_SLOT) {
+			dummy_phys = fsl_chan->edma->dummy_rx_phys;
+			dummy_chan = fsl_chan;
+			fsl_chan = &fsl_chan->edma->chans[EDMA_A011218_RX_CHAN];
+		} else if (fsl_chan->srcid == EDMA_A011218_TX_SLOT) {
+			dummy_phys = fsl_chan->edma->dummy_tx_phys;
+			dummy_chan = fsl_chan;
+			fsl_chan = &fsl_chan->edma->chans[EDMA_A011218_TX_CHAN];
+		}
+	}
 
 	/*
 	 * TCD parameters are stored in struct fsl_edma_hw_tcd in little
@@ -471,45 +485,41 @@ static void fsl_edma_set_tcd_regs(struct fsl_edma_chan *fsl_chan, void *tcd)
 
 	edma_cp_tcd_to_reg(fsl_chan, tcd, csr);
 
-	if (fsl_chan->edma->drvdata->flags & FSL_EDMA_DRV_A011218) {
-		u32 target_shadow = 0;
-		dma_addr_t dummy_phys = 0;
+	if (dummy_chan != NULL) {
+		u16 dummy_citer = fsl_edma_get_tcd_to_cpu(fsl_chan, tcd, citer);
+		u16 dummy_biter = fsl_edma_get_tcd_to_cpu(fsl_chan, tcd, biter);
 
-		/* Identify if this channel configuration belongs to the DSPI peripheral */
-		if (fsl_chan->srcid == EDMA_A011218_RX_SLOT) {
-			target_shadow = EDMA_A011218_RX_CHAN;
-			dummy_phys = fsl_chan->edma->dummy_rx_phys;
-		} else if (fsl_chan->srcid == EDMA_A011218_TX_SLOT) {
-			target_shadow = EDMA_A011218_TX_CHAN;
-			dummy_phys = fsl_chan->edma->dummy_tx_phys;
-		}
+		edma_write_tcdreg(dummy_chan, 0, csr);
 
-		if (target_shadow) {
-			u16 orig_citer = fsl_edma_get_tcd_to_cpu(fsl_chan, tcd, citer);
-			u16 orig_biter = fsl_edma_get_tcd_to_cpu(fsl_chan, tcd, biter);
-			void __iomem *tcd_base = fsl_chan->edma->membase + EDMA_TCD +
-						 (target_shadow * sizeof(struct fsl_edma_hw_tcd));
+		edma_write_tcdreg(dummy_chan, cpu_to_le32(dummy_phys), saddr);
+		edma_write_tcdreg(dummy_chan, cpu_to_le32(dummy_phys + sizeof(u32)), daddr);
 
-			memcpy_toio(tcd_base, fsl_chan->tcd, sizeof(struct fsl_edma_hw_tcd));
+		edma_write_tcdreg(dummy_chan, cpu_to_le16(0x0202), attr);
+		edma_write_tcdreg(dummy_chan, 0, soff);
 
-			edma_write_tcdreg(fsl_chan, 0, csr);
-			edma_write_tcdreg(fsl_chan, cpu_to_le32(dummy_phys), saddr);
-			edma_write_tcdreg(fsl_chan, cpu_to_le32(dummy_phys + 4), daddr);
-			edma_write_tcdreg(fsl_chan, cpu_to_le16(0x0202), attr); /* 32-bit transfer data size selection */
-			edma_write_tcdreg(fsl_chan, 0, soff);
-			edma_write_tcdreg(fsl_chan, cpu_to_le32(4), nbytes); /* 4-byte dummy transfer */
-			edma_write_tcdreg(fsl_chan, 0, slast);
-			edma_write_tcdreg(fsl_chan, 0, doff);
-			edma_write_tcdreg(fsl_chan, 0, dlast_sga);
+		edma_write_tcdreg(dummy_chan, cpu_to_le32(4), nbytes);
+		edma_write_tcdreg(dummy_chan, 0, slast);
 
-			u16 new_citer = orig_citer | (1 << 15) | ((target_shadow & 0x3F) << 9);
-			u16 new_biter = orig_biter | (1 << 15) | ((target_shadow & 0x3F) << 9);
-			u16 new_csr = csr | EDMA_TCD_CSR_E_LINK | ((target_shadow & 0x3F) << 8);
+		edma_write_tcdreg(dummy_chan,
+				cpu_to_le16(dummy_biter |
+					EDMA_TCD_BITER_LINK(fsl_chan->vchan.chan.chan_id)),
+				biter);
 
-			edma_write_tcdreg(fsl_chan, cpu_to_le16(new_citer), citer);
-			edma_write_tcdreg(fsl_chan, cpu_to_le16(new_biter), biter);
-			edma_write_tcdreg(fsl_chan, cpu_to_le16(new_csr), csr);
-		}
+		edma_write_tcdreg(dummy_chan,
+				cpu_to_le16(dummy_citer |
+					EDMA_TCD_CITER_LINK(fsl_chan->vchan.chan.chan_id)),
+				citer);
+
+		edma_write_tcdreg(dummy_chan, 0, doff);
+		edma_write_tcdreg(dummy_chan, 0, dlast_sga);
+
+		edma_write_tcdreg(dummy_chan,
+				cpu_to_le16(csr |
+					EDMA_TCD_CSR_LINK(fsl_chan->vchan.chan.chan_id)),
+				csr);
+
+
+
 	}
 }
 

@@ -35,6 +35,9 @@
 #define EDMA_TCD_CITER_CITER(x)		((x) & EDMA_TCD_ITER_MASK)
 #define EDMA_TCD_BITER_BITER(x)		((x) & EDMA_TCD_ITER_MASK)
 
+#define EDMA_TCD_CITER_LINK(x) (BIT(15) | (((x) & GENMASK(6, 0)) << 9))
+#define EDMA_TCD_BITER_LINK(x) (BIT(15) | (((x) & GENMASK(6, 0)) << 9))
+
 #define EDMA_TCD_CSR_START		BIT(0)
 #define EDMA_TCD_CSR_INT_MAJOR		BIT(1)
 #define EDMA_TCD_CSR_INT_HALF		BIT(2)
@@ -43,6 +46,7 @@
 #define EDMA_TCD_CSR_E_LINK		BIT(5)
 #define EDMA_TCD_CSR_ACTIVE		BIT(6)
 #define EDMA_TCD_CSR_DONE		BIT(7)
+#define EDMA_TCD_CSR_LINK(x)           (EDMA_TCD_CSR_E_LINK | (((x) & GENMASK(6, 0)) << 8))
 
 #define EDMA_V3_TCD_NBYTES_MLOFF_NBYTES(x) ((x) & GENMASK(9, 0))
 #define EDMA_V3_TCD_NBYTES_MLOFF(x)        (x << 10)

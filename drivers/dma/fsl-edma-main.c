@@ -42,19 +42,16 @@ static irqreturn_t fsl_edma_tx_handler(int irq, void *dev_id)
 	if (!intr)
 		return IRQ_NONE;
 
-	if (fsl_edma->drvdata->flags & FSL_EDMA_DRV_A011218) {
-        struct fsl_edma_engine *edma = fsl_edma;
-
-		if (intr & BIT(EDMA_A011218_RX_CHAN))
-			edma_writeb(edma, EDMA_CINT_CINT(EDMA_A011218_RX_CHAN), regs->cint);
-		if (intr & BIT(EDMA_A011218_TX_CHAN))
-			edma_writeb(edma, EDMA_CINT_CINT(EDMA_A011218_TX_CHAN), regs->cint);
-	}
-
 	for (ch = 0; ch < fsl_edma->n_chans; ch++) {
 		if (intr & (0x1 << ch)) {
 			edma_writeb(fsl_edma, EDMA_CINT_CINT(ch), regs->cint);
-			fsl_edma_tx_chan_handler(&fsl_edma->chans[ch]);
+
+			if (fsl_edma->drvdata->flags & FSL_EDMA_DRV_A011218) {
+				if (ch != EDMA_A011218_RX_CHAN || ch != EDMA_A011218_TX_CHAN) {
+					fsl_edma_tx_chan_handler(&fsl_edma->chans[ch]);
+				}
+			} else
+				fsl_edma_tx_chan_handler(&fsl_edma->chans[ch]);
 		}
 	}
 	return IRQ_HANDLED;
@@ -224,20 +221,17 @@ static irqreturn_t fsl_edma_err_handler(int irq, void *dev_id)
 	if (!err)
 		return IRQ_NONE;
 
-	if (fsl_edma->drvdata->flags & FSL_EDMA_DRV_A011218) {
-        struct fsl_edma_engine *edma = fsl_edma;
-
-		if (err & BIT(EDMA_A011218_RX_CHAN))
-			edma_writeb(edma, EDMA_CERR_CERR(EDMA_A011218_RX_CHAN), regs->cerr);
-		if (err & BIT(EDMA_A011218_TX_CHAN))
-			edma_writeb(edma, EDMA_CERR_CERR(EDMA_A011218_TX_CHAN), regs->cerr);
-	}
-
 	for (ch = 0; ch < fsl_edma->n_chans; ch++) {
 		if (err & (0x1 << ch)) {
 			fsl_edma_disable_request(&fsl_edma->chans[ch]);
 			edma_writeb(fsl_edma, EDMA_CERR_CERR(ch), regs->cerr);
-			fsl_edma_err_chan_handler(&fsl_edma->chans[ch]);
+
+			if (fsl_edma->drvdata->flags & FSL_EDMA_DRV_A011218) {
+				if (ch != EDMA_A011218_RX_CHAN || ch != EDMA_A011218_TX_CHAN) {
+					fsl_edma_err_chan_handler(&fsl_edma->chans[ch]);
+				}
+			} else
+				fsl_edma_err_chan_handler(&fsl_edma->chans[ch]);
 		}
 	}
 	return IRQ_HANDLED;
@@ -285,7 +279,7 @@ static struct dma_chan *fsl_edma_xlate(struct of_phandle_args *dma_spec,
 		if (chan->client_count)
 			continue;
 
-        /* Prevent the system from allocating our reserved A-011218 shadow channels */
+        	/* Prevent the system from allocating our reserved A-011218 shadow channels */
 		if ((fsl_edma->drvdata->flags & FSL_EDMA_DRV_A011218) &&
 		    (chan->chan_id == EDMA_A011218_RX_CHAN || chan->chan_id == EDMA_A011218_TX_CHAN))
 			continue;

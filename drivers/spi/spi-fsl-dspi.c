@@ -257,7 +257,7 @@ static const struct fsl_dspi_devtype_data devtype_data[] = {
 	},
 	[LS1012A] = {
 		.trans_mode		= DSPI_DMA_MODE,
-		.max_clock_factor	= 8,
+		.max_clock_factor	= 4,
 		.fifo_size		= 16,
 		.regmap			= &dspi_regmap_config[DSPI_XSPI_REGMAP],
 	},
@@ -276,7 +276,7 @@ static const struct fsl_dspi_devtype_data devtype_data[] = {
 	},
 	[LS1046A] = {
 		.trans_mode		= DSPI_DMA_MODE,
-		.max_clock_factor	= 8,
+		.max_clock_factor	= 4,
 		.fifo_size		= 16,
 		.regmap			= &dspi_regmap_config[DSPI_XSPI_REGMAP],
 	},
@@ -319,19 +319,17 @@ static const struct fsl_dspi_devtype_data devtype_data[] = {
 };
 
 struct fsl_dspi_dma {
+    struct mutex				lock;
+	size_t					buffer_size;
+
 	u32					*tx_dma_buf;
 	struct dma_chan				*chan_tx;
 	dma_addr_t				tx_dma_phys;
-	struct completion			cmd_tx_complete;
-	struct dma_async_tx_descriptor		*tx_desc;
 
 	u32					*rx_dma_buf;
 	struct dma_chan				*chan_rx;
 	dma_addr_t				rx_dma_phys;
 	struct completion			cmd_rx_complete;
-	struct dma_async_tx_descriptor		*rx_desc;
-
-	size_t					bufsize;
 };
 
 struct fsl_dspi {
@@ -492,190 +490,82 @@ static int dspi_fifo_error(struct fsl_dspi *dspi, u32 spi_sr)
 
 #if IS_ENABLED(CONFIG_DMA_ENGINE)
 
-/* Prepare one TX FIFO entry (txdata plus cmd) */
-static u32 dspi_pop_tx_pushr(struct fsl_dspi *dspi)
-{
-	u16 cmd = dspi->tx_cmd, data = dspi_pop_tx(dspi);
-
-	if (spi_controller_is_target(dspi->ctlr))
-		return data;
-
-	if (dspi->len > 0)
-		cmd |= SPI_PUSHR_CMD_CONT;
-	return cmd << 16 | data;
-}
-
-static size_t dspi_dma_max_datawords(struct fsl_dspi *dspi)
-{
-	/*
-	 * Transfers look like one of these, so we always use a full DMA word
-	 * regardless of SPI word size:
-	 *
-	 * 31              16 15                   0
-	 * -----------------------------------------
-	 * |   CONTROL WORD  |     16-bit DATA     |
-	 * -----------------------------------------
-	 * or
-	 * -----------------------------------------
-	 * |   CONTROL WORD  | UNUSED | 8-bit DATA |
-	 * -----------------------------------------
-	 */
-	return dspi->dma->bufsize / DMA_SLAVE_BUSWIDTH_4_BYTES;
-}
-
-static size_t dspi_dma_transfer_size(struct fsl_dspi *dspi)
-{
-	return dspi->words_in_flight * DMA_SLAVE_BUSWIDTH_4_BYTES;
-}
-
-static void dspi_tx_dma_callback(void *arg)
-{
-	struct fsl_dspi *dspi = arg;
-	struct fsl_dspi_dma *dma = dspi->dma;
-	struct device *dev = &dspi->pdev->dev;
-
-	dma_sync_single_for_cpu(dev, dma->tx_dma_phys,
-				dspi_dma_transfer_size(dspi), DMA_TO_DEVICE);
-	complete(&dma->cmd_tx_complete);
-}
-
 static void dspi_rx_dma_callback(void *arg)
 {
 	struct fsl_dspi *dspi = arg;
-	struct fsl_dspi_dma *dma = dspi->dma;
-	struct device *dev = &dspi->pdev->dev;
-	int i;
-
-	if (dspi->rx) {
-		dma_sync_single_for_cpu(dev, dma->rx_dma_phys,
-					dspi_dma_transfer_size(dspi),
-					DMA_FROM_DEVICE);
-		for (i = 0; i < dspi->words_in_flight; i++)
-			dspi_push_rx(dspi, dspi->dma->rx_dma_buf[i]);
-	}
-
-	complete(&dma->cmd_rx_complete);
+	complete(&dspi->dma->cmd_rx_complete);
 }
 
 static int dspi_next_xfer_dma_submit(struct fsl_dspi *dspi)
 {
-	size_t size = dspi_dma_transfer_size(dspi);
+	struct dma_async_tx_descriptor *tx_desc, *rx_desc;
 	struct device *dev = &dspi->pdev->dev;
 	struct fsl_dspi_dma *dma = dspi->dma;
-	int time_left;
-	u32 spi_sr;
-	int i;
+	enum dma_status rx_status;
+	dma_cookie_t rx_cookie;
 
-	for (i = 0; i < dspi->words_in_flight; i++)
-		dspi->dma->tx_dma_buf[i] = dspi_pop_tx_pushr(dspi);
-
-	dma_sync_single_for_device(dev, dma->tx_dma_phys, size, DMA_TO_DEVICE);
-	dma->tx_desc = dmaengine_prep_slave_single(dma->chan_tx,
-						   dma->tx_dma_phys, size,
-						   DMA_MEM_TO_DEV,
-						   DMA_PREP_INTERRUPT |
-						   DMA_CTRL_ACK);
-	if (!dma->tx_desc) {
+	rx_desc = dmaengine_prep_slave_single(dma->chan_rx, dma->rx_dma_phys,
+					dspi->words_in_flight * DMA_SLAVE_BUSWIDTH_4_BYTES,
+					DMA_DEV_TO_MEM, DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
+	if (!rx_desc) {
 		dev_err(dev, "Not able to get desc for DMA xfer\n");
 		return -EIO;
 	}
 
-	dma->tx_desc->callback = dspi_tx_dma_callback;
-	dma->tx_desc->callback_param = dspi;
-	if (dma_submit_error(dmaengine_submit(dma->tx_desc))) {
-		dev_err(dev, "DMA submit failed\n");
-		return -EINVAL;
-	}
-
-	dma_sync_single_for_device(dev, dma->rx_dma_phys, size,
-				   DMA_FROM_DEVICE);
-	dma->rx_desc = dmaengine_prep_slave_single(dma->chan_rx,
-						   dma->rx_dma_phys, size,
-						   DMA_DEV_TO_MEM,
-						   DMA_PREP_INTERRUPT |
-						   DMA_CTRL_ACK);
-	if (!dma->rx_desc) {
-		dev_err(dev, "Not able to get desc for DMA xfer\n");
-		return -EIO;
-	}
-
-	dma->rx_desc->callback = dspi_rx_dma_callback;
-	dma->rx_desc->callback_param = dspi;
-	if (dma_submit_error(dmaengine_submit(dma->rx_desc))) {
+	rx_desc->callback = dspi_rx_dma_callback;
+	rx_desc->callback_param = dspi;
+	rx_cookie = dmaengine_submit(rx_desc);
+	if (dma_submit_error(rx_cookie)) {
 		dev_err(dev, "DMA submit failed\n");
 		return -EINVAL;
 	}
 
 	reinit_completion(&dspi->dma->cmd_rx_complete);
-	reinit_completion(&dspi->dma->cmd_tx_complete);
-
 	dma_async_issue_pending(dma->chan_rx);
+
+	tx_desc = dmaengine_prep_slave_single(dma->chan_tx, dma->tx_dma_phys,
+					dspi->words_in_flight * DMA_SLAVE_BUSWIDTH_4_BYTES,
+					DMA_MEM_TO_DEV, DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
+	if (!tx_desc) {
+		dev_err(dev, "Not able to get desc for DMA xfer\n");
+		return -EIO;
+	}
+
+	if (dma_submit_error(dmaengine_submit(tx_desc))) {
+		dev_err(dev, "DMA submit failed\n");
+		return -EINVAL;
+	}
+
 	dma_async_issue_pending(dma->chan_tx);
 
-	if (spi_controller_is_target(dspi->ctlr)) {
-		wait_for_completion_interruptible(&dspi->dma->cmd_rx_complete);
-		regmap_read(dspi->regmap, SPI_SR, &spi_sr);
-		return dspi_fifo_error(dspi, spi_sr);
-	}
-
-	time_left = wait_for_completion_timeout(&dspi->dma->cmd_tx_complete,
-						DMA_COMPLETION_TIMEOUT);
-	if (time_left == 0) {
-		dev_err(dev, "DMA tx timeout\n");
-		dmaengine_terminate_all(dma->chan_tx);
-		dmaengine_terminate_all(dma->chan_rx);
-		return -ETIMEDOUT;
-	}
-
-	time_left = wait_for_completion_timeout(&dspi->dma->cmd_rx_complete,
-						DMA_COMPLETION_TIMEOUT);
-	if (time_left == 0) {
-		dev_err(dev, "DMA rx timeout\n");
-		dmaengine_terminate_all(dma->chan_tx);
-		dmaengine_terminate_all(dma->chan_rx);
-		return -ETIMEDOUT;
+	rx_status = dma_async_is_tx_complete(dma->chan_rx, rx_cookie, NULL, NULL);
+	switch (rx_status) {
+		case DMA_IN_PROGRESS:
+			wait_for_completion(&dspi->dma->cmd_rx_complete);
+			break;
+		case DMA_COMPLETE:
+			break;
+		default:
+			dev_err(dev, "DMA RX Error: %d\n", rx_status);
+			break;
 	}
 
 	return 0;
 }
 
-static void dspi_dma_xfer(struct fsl_dspi *dspi)
-{
-	struct spi_message *message = dspi->cur_msg;
-	struct device *dev = &dspi->pdev->dev;
-
-	/*
-	 * dspi->len gets decremented by dspi_pop_tx_pushr in
-	 * dspi_next_xfer_dma_submit
-	 */
-	while (dspi->len) {
-		/* Figure out operational bits-per-word for this chunk */
-		dspi_setup_accel(dspi);
-
-		dspi->words_in_flight = min(dspi->len / dspi->oper_word_size,
-					    dspi_dma_max_datawords(dspi));
-
-		message->actual_length += dspi->words_in_flight *
-					  dspi->oper_word_size;
-
-		message->status = dspi_next_xfer_dma_submit(dspi);
-		if (message->status) {
-			dev_err(dev, "DMA transfer failed\n");
-			break;
-		}
-	}
-}
-
 static int dspi_request_dma(struct fsl_dspi *dspi, phys_addr_t phy_addr)
 {
 	struct device *dev = &dspi->pdev->dev;
-	struct dma_slave_config cfg;
+	struct dma_slave_config rx_cfg = {}, tx_cfg = {};
 	struct fsl_dspi_dma *dma;
 	int ret;
 
 	dma = devm_kzalloc(dev, sizeof(*dma), GFP_KERNEL);
 	if (!dma)
 		return -ENOMEM;
+
+	dma->buffer_size = 256 * sizeof(u32);
+    mutex_init(&dma->lock);
 
 	dma->chan_rx = dma_request_chan(dev, "rx");
 	if (IS_ERR(dma->chan_rx))
@@ -687,70 +577,53 @@ static int dspi_request_dma(struct fsl_dspi *dspi, phys_addr_t phy_addr)
 		goto err_tx_channel;
 	}
 
-	if (spi_controller_is_target(dspi->ctlr)) {
-		/*
-		 * In target mode we have to be ready to receive the maximum
-		 * that can possibly be transferred at once by EDMA without any
-		 * FIFO underflows.
-		 */
-		dma->bufsize = min(dma_get_max_seg_size(dma->chan_rx->device->dev),
-				   dma_get_max_seg_size(dma->chan_tx->device->dev)) *
-			       DMA_SLAVE_BUSWIDTH_4_BYTES;
-	} else {
-		dma->bufsize = PAGE_SIZE;
-	}
-
-	dma->tx_dma_buf = dma_alloc_noncoherent(dma->chan_tx->device->dev,
-						dma->bufsize, &dma->tx_dma_phys,
-						DMA_TO_DEVICE, GFP_KERNEL);
+	dma->tx_dma_buf = dma_alloc_coherent(dma->chan_tx->device->dev,
+					     dma->buffer_size, &dma->tx_dma_phys, GFP_KERNEL);
 	if (!dma->tx_dma_buf) {
 		ret = -ENOMEM;
 		goto err_tx_dma_buf;
 	}
 
-	dma->rx_dma_buf = dma_alloc_noncoherent(dma->chan_rx->device->dev,
-						dma->bufsize, &dma->rx_dma_phys,
-						DMA_FROM_DEVICE, GFP_KERNEL);
+	dma->rx_dma_buf = dma_alloc_coherent(dma->chan_rx->device->dev,
+					     dma->buffer_size, &dma->rx_dma_phys, GFP_KERNEL);
 	if (!dma->rx_dma_buf) {
 		ret = -ENOMEM;
 		goto err_rx_dma_buf;
 	}
 
-	memset(&cfg, 0, sizeof(cfg));
-	cfg.src_addr = phy_addr + SPI_POPR;
-	cfg.dst_addr = phy_addr + SPI_PUSHR;
-	cfg.src_addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES;
-	cfg.dst_addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES;
-	cfg.src_maxburst = 1;
-	cfg.dst_maxburst = 1;
+	rx_cfg.direction = DMA_DEV_TO_MEM;
+	rx_cfg.src_addr = phy_addr + SPI_POPR;
+	rx_cfg.src_addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES;
+	rx_cfg.src_maxburst = 1;
 
-	cfg.direction = DMA_DEV_TO_MEM;
-	ret = dmaengine_slave_config(dma->chan_rx, &cfg);
+	ret = dmaengine_slave_config(dma->chan_rx, &rx_cfg);
 	if (ret) {
 		dev_err_probe(dev, ret, "can't configure rx dma channel\n");
 		goto err_slave_config;
 	}
 
-	cfg.direction = DMA_MEM_TO_DEV;
-	ret = dmaengine_slave_config(dma->chan_tx, &cfg);
+	tx_cfg.direction = DMA_MEM_TO_DEV;
+	tx_cfg.dst_addr = phy_addr + SPI_PUSHR;
+	tx_cfg.dst_addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES;
+	tx_cfg.dst_maxburst = 1;
+
+	ret = dmaengine_slave_config(dma->chan_tx, &tx_cfg);
 	if (ret) {
 		dev_err_probe(dev, ret, "can't configure tx dma channel\n");
 		goto err_slave_config;
 	}
 
 	dspi->dma = dma;
-	init_completion(&dma->cmd_tx_complete);
 	init_completion(&dma->cmd_rx_complete);
 
 	return 0;
 
 err_slave_config:
-	dma_free_noncoherent(dma->chan_rx->device->dev, dma->bufsize,
-			     dma->rx_dma_buf, dma->rx_dma_phys,
-			     DMA_FROM_DEVICE);
+	dma_free_coherent(dma->chan_rx->device->dev, dma->buffer_size,
+			  dma->rx_dma_buf, dma->rx_dma_phys);
 err_rx_dma_buf:
-	dma_free_noncoherent(dma->chan_tx->device->dev, dma->bufsize,
-			     dma->tx_dma_buf, dma->tx_dma_phys, DMA_TO_DEVICE);
+	dma_free_coherent(dma->chan_tx->device->dev, dma->buffer_size,
+			  dma->tx_dma_buf, dma->tx_dma_phys);
 err_tx_dma_buf:
 	dma_release_channel(dma->chan_tx);
 err_tx_channel:
@@ -770,24 +643,19 @@ static void dspi_release_dma(struct fsl_dspi *dspi)
 		return;
 
 	if (dma->chan_tx) {
-		dma_free_noncoherent(dma->chan_tx->device->dev, dma->bufsize,
-				     dma->tx_dma_buf, dma->tx_dma_phys,
-				     DMA_TO_DEVICE);
+		dma_free_coherent(dma->chan_tx->device->dev, dma->buffer_size,
+				  dma->tx_dma_buf, dma->tx_dma_phys);
 		dma_release_channel(dma->chan_tx);
 	}
 
 	if (dma->chan_rx) {
-		dma_free_noncoherent(dma->chan_rx->device->dev, dma->bufsize,
-				     dma->rx_dma_buf, dma->rx_dma_phys,
-				     DMA_FROM_DEVICE);
+		dma_free_coherent(dma->chan_rx->device->dev, dma->buffer_size,
+				  dma->rx_dma_buf, dma->rx_dma_phys);
 		dma_release_channel(dma->chan_rx);
 	}
 }
+
 #else
-static void dspi_dma_xfer(struct fsl_dspi *dspi)
-{
-	dspi->cur_msg->status = -EINVAL;
-}
 static int dspi_request_dma(struct fsl_dspi *dspi, phys_addr_t phy_addr)
 {
 	dev_err(&dspi->pdev->dev, "DMA support not enabled in kernel\n");
@@ -1148,7 +1016,7 @@ static void dspi_deassert_cs(struct spi_device *spi, bool *cs)
 	*cs = false;
 }
 
-static int dspi_transfer_one_message(struct spi_controller *ctlr,
+static int dspi_transfer_one_message_fifo(struct spi_controller *ctlr,
 				     struct spi_message *message)
 {
 	struct fsl_dspi *dspi = spi_controller_get_devdata(ctlr);
@@ -1213,30 +1081,28 @@ static int dspi_transfer_one_message(struct spi_controller *ctlr,
 		spi_take_timestamp_pre(dspi->ctlr, dspi->cur_transfer,
 				       dspi->progress, !dspi->irq);
 
-		if (dspi->devtype_data->trans_mode == DSPI_DMA_MODE) {
-			dspi_dma_xfer(dspi);
-		} else {
-			/*
-			 * Reinitialize the completion before transferring data
-			 * to avoid the case where it might remain in the done
-			 * state due to a spurious interrupt from a previous
-			 * transfer. This could falsely signal that the current
-			 * transfer has completed.
-			 */
-			if (dspi->irq)
-				reinit_completion(&dspi->xfer_done);
+		/*
+		 * Reinitialize the completion before transferring data
+		 * to avoid the case where it might remain in the done
+		 * state due to a spurious interrupt from a previous
+		 * transfer. This could falsely signal that the current
+		 * transfer has completed.
+		 */
+		if (dspi->irq)
+			reinit_completion(&dspi->xfer_done);
 
-			dspi_fifo_write(dspi);
+		dspi_fifo_write(dspi);
 
-			if (dspi->irq)
-				wait_for_completion(&dspi->xfer_done);
-			else
-				dspi_poll(dspi);
-		}
+		if (dspi->irq)
+			wait_for_completion(&dspi->xfer_done);
+		else
+			dspi_poll(dspi);
+
 		if (READ_ONCE(message->status))
 			break;
 
 		spi_transfer_delay_exec(transfer);
+
 
 		if (!(dspi->tx_cmd & SPI_PUSHR_CMD_CONT))
 			dspi_deassert_cs(spi, &cs);
@@ -1255,6 +1121,197 @@ static int dspi_transfer_one_message(struct spi_controller *ctlr,
 	spi_finalize_current_message(ctlr);
 
 	return message->status;
+}
+
+static void dspi_log_hardware_state(struct fsl_dspi *dspi, struct fsl_dspi_dma *dma)
+{
+	struct device *dev = &dspi->pdev->dev;
+	u32 mcr, tcr, sr, rser, srex;
+	u32 ctar[6], ctare[6], txfr[5], rxfr[5];
+	int i, max_ctar, max_fifo;
+
+	max_ctar = is_s32g_dspi(dspi) ? 6 : 4;
+	max_fifo = is_s32g_dspi(dspi) ? 5 : 4;
+
+	regmap_read(dspi->regmap, SPI_MCR, &mcr);
+	regmap_read(dspi->regmap, SPI_TCR, &tcr);
+	regmap_read(dspi->regmap, SPI_SR, &sr);
+	regmap_read(dspi->regmap, SPI_RSER, &rser);
+	regmap_read(dspi->regmap, SPI_SREX, &srex);
+
+	dev_info(dev, "========== DSPI DATA LOG ==========\n");
+	dev_info(dev, "SPI_MCR   (0x00) : 0x%08x\n", mcr);
+	dev_info(dev, "SPI_TCR   (0x08) : 0x%08x\n", tcr);
+
+	for (i = 0; i < max_ctar; i++) {
+		regmap_read(dspi->regmap, SPI_CTAR(i), &ctar[i]);
+		dev_info(dev, "SPI_CTAR%d  (0x%02x) : 0x%08x\n", i, 0x0c + (i * 4), ctar[i]);
+	}
+
+	for (i = 0; i < max_ctar; i++) {
+		regmap_read(dspi->regmap, SPI_CTARE(i), &ctare[i]);
+		dev_info(dev, "SPI_CTARE%d (0x%03x): 0x%08x\n", i, 0x11c + (i * 4), ctare[i]);
+	}
+
+	dev_info(dev, "SPI_SR    (0x2c) : 0x%08x\n", sr);
+	dev_info(dev, "SPI_RSER  (0x30) : 0x%08x\n", rser);
+
+	for (i = 0; i < max_fifo; i++) {
+		regmap_read(dspi->regmap, SPI_TXFR0 + (i * 4), &txfr[i]);
+		dev_info(dev, "SPI_TXFR%d  (0x%02x) : 0x%08x\n", i, 0x3c + (i * 4), txfr[i]);
+	}
+
+	for (i = 0; i < max_fifo; i++) {
+		regmap_read(dspi->regmap, SPI_RXFR0 + (i * 4), &rxfr[i]);
+		dev_info(dev, "SPI_RXFR%d  (0x%02x) : 0x%08x\n", i, 0x7c + (i * 4), rxfr[i]);
+	}
+
+	dev_info(dev, "SPI_SREX  (0x13c): 0x%08x\n", srex);
+
+	dev_info(dev, "--- DMA TX Buffer Dump ---\n");
+	for (i = 0; i < dspi->words_in_flight; i++) {
+		dev_info(dev, "DMA_TX[%d]: 0x%08x\n", i, be32_to_cpu(dma->tx_dma_buf[i]));
+	}
+	dev_info(dev, "===================================\n");
+}
+
+static int dspi_transfer_one_message_dma(struct spi_controller *ctlr,
+					 struct spi_message *message)
+{
+	struct fsl_dspi *dspi = spi_controller_get_devdata(ctlr);
+	struct spi_device *spi = message->spi;
+	struct device *dev = &dspi->pdev->dev;
+	struct fsl_dspi_dma *dma = dspi->dma;
+	struct spi_transfer *transfer;
+	int status = 0, i, offset, bytes_per_word, num_words;
+	u16 cmd, end_cmd;
+	u32 val;
+
+    mutex_lock(&dma->lock);
+
+	message->actual_length = 0;
+	dspi->words_in_flight = 0;
+	dspi->cur_msg = message;
+	dspi->cur_chip = spi_get_ctldata(spi);
+
+	/* Bring controller out of HALT state */
+	regmap_read(dspi->regmap, SPI_MCR, &val);
+	if (val & SPI_MCR_HALT) {
+		regmap_update_bits(dspi->regmap, SPI_MCR, SPI_MCR_HALT, 0);
+		while (regmap_read(dspi->regmap, SPI_SR, &val) >= 0 &&
+		       !(val & SPI_SR_TXRXS))
+			;
+	}
+
+	regmap_write(dspi->regmap, SPI_CTAR(0),
+			 dspi->cur_chip->ctar_val | SPI_FRAME_BITS(8));
+
+	regmap_write(dspi->regmap, SPI_CTAR(1),
+			 dspi->cur_chip->ctar_val | SPI_FRAME_BITS(16));
+
+	offset = 0;
+	list_for_each_entry(transfer, &message->transfers, transfer_list) {
+		if ((offset + transfer->len) > (dma->buffer_size / sizeof(u32))) {
+			dev_err(dev, "Maximum transfer SPI DMA size is %zu\n",
+					dma->buffer_size / sizeof(u32));
+			status = -EINVAL;
+			goto out;
+		}
+
+		end_cmd = SPI_PUSHR_CMD_PCS(spi_get_chipselect(spi, 0));
+		if (list_is_last(&transfer->transfer_list, &message->transfers)) {
+			if (transfer->cs_change)
+				end_cmd |= SPI_PUSHR_CMD_CONT;
+		} else {
+			if (!transfer->cs_change)
+				end_cmd |= SPI_PUSHR_CMD_CONT;
+		}
+
+		cmd = SPI_PUSHR_CMD_CONT | SPI_PUSHR_CMD_PCS(spi_get_chipselect(spi, 0));
+
+		bytes_per_word = transfer->bits_per_word / 8;
+		num_words = transfer->len / bytes_per_word;
+
+		if (bytes_per_word == 2) {
+			cmd |= SPI_PUSHR_CMD_CTAS(1);
+			end_cmd |= SPI_PUSHR_CMD_CTAS(1);
+		} else {
+			cmd |= SPI_PUSHR_CMD_CTAS(0);
+			end_cmd |= SPI_PUSHR_CMD_CTAS(0);
+		}
+
+		for (i = 0; i < (num_words - 1); i++) {
+			if (transfer->tx_buf == NULL) {
+				dma->tx_dma_buf[i+offset] = cpu_to_be32(cmd << 16);
+			} else if (bytes_per_word == 2) {
+				dma->tx_dma_buf[i+offset] = cpu_to_be32((cmd << 16)
+						| cpu_to_be16(((u16*)transfer->tx_buf)[i]));
+			} else {
+				dma->tx_dma_buf[i+offset] = cpu_to_be32((cmd << 16)
+						| ((u8*)transfer->tx_buf)[i]);
+			}
+			message->actual_length += bytes_per_word;
+			dspi->words_in_flight++;
+		}
+
+		if (transfer->tx_buf == NULL) {
+			dma->tx_dma_buf[i+offset] = cpu_to_be32(end_cmd << 16);
+		} else if (bytes_per_word == 2) {
+			dma->tx_dma_buf[i+offset] = cpu_to_be32((end_cmd << 16)
+					| cpu_to_be16(((u16*)transfer->tx_buf)[i]));
+		} else {
+			dma->tx_dma_buf[i+offset] = cpu_to_be32((end_cmd << 16)
+					| ((u8*)transfer->tx_buf)[i]);
+		}
+		message->actual_length += bytes_per_word;
+		dspi->words_in_flight++;
+
+		offset += num_words;
+	}
+
+	regmap_update_bits(dspi->regmap, SPI_MCR,
+			   SPI_MCR_CLR_TXF | SPI_MCR_CLR_RXF,
+			   SPI_MCR_CLR_TXF | SPI_MCR_CLR_RXF);
+
+    dspi_log_hardware_state(dspi, dma);
+
+	status = dspi_next_xfer_dma_submit(dspi);
+	if (status) {
+		dev_err(dev, "DMA transfer failed\n");
+		goto out;
+	}
+
+	offset = 0;
+	list_for_each_entry(transfer, &message->transfers, transfer_list) {
+		bytes_per_word = transfer->bits_per_word / 8;
+		num_words = transfer->len / bytes_per_word;
+
+		if (transfer->rx_buf) {
+			for (i = 0; i < num_words; i++) {
+				if (bytes_per_word == 2) {
+					((u16*)transfer->rx_buf)[i] =
+						be16_to_cpu((u16)(be32_to_cpu(dma->rx_dma_buf[offset + i])));
+				} else {
+					((u8*)transfer->rx_buf)[i] =
+						be32_to_cpu(dma->rx_dma_buf[offset + i]);
+				}
+			}
+		}
+		offset += num_words;
+	}
+
+out:
+	/* Return controller to HALT state */
+	regmap_update_bits(dspi->regmap, SPI_MCR, SPI_MCR_HALT, SPI_MCR_HALT);
+	while (regmap_read(dspi->regmap, SPI_SR, &val) >= 0 && val & SPI_SR_TXRXS)
+		;
+
+    mutex_unlock(&dma->lock);
+
+	message->status = status;
+	spi_finalize_current_message(ctlr);
+
+	return status;
 }
 
 static int dspi_set_mtf(struct fsl_dspi *dspi)
@@ -1358,6 +1415,7 @@ static int dspi_setup(struct spi_device *spi)
 				  SPI_CTAR_PASC(pasc) |
 				  SPI_CTAR_ASC(asc) |
 				  SPI_CTAR_PBR(pbr) |
+				  SPI_CTAR_DT(br) |
 				  SPI_CTAR_BR(br);
 
 		if (dspi->mtf_enabled)
@@ -1554,7 +1612,6 @@ static int dspi_probe(struct platform_device *pdev)
 	dspi->ctlr = ctlr;
 
 	ctlr->setup = dspi_setup;
-	ctlr->transfer_one_message = dspi_transfer_one_message;
 	ctlr->dev.of_node = pdev->dev.of_node;
 
 	ctlr->cleanup = dspi_cleanup;
@@ -1602,10 +1659,13 @@ static int dspi_probe(struct platform_device *pdev)
 	if (spi_controller_is_target(ctlr) && is_s32g_dspi(dspi))
 		dspi->devtype_data = &devtype_data[S32G_TARGET];
 
-	if (dspi->devtype_data->trans_mode == DSPI_XSPI_MODE)
+	if (dspi->devtype_data->trans_mode == DSPI_XSPI_MODE) {
+		ctlr->transfer_one_message = dspi_transfer_one_message_fifo;
 		ctlr->bits_per_word_mask = SPI_BPW_RANGE_MASK(4, 32);
-	else
-		ctlr->bits_per_word_mask = SPI_BPW_RANGE_MASK(4, 16);
+	} else {
+		ctlr->transfer_one_message = dspi_transfer_one_message_dma;
+		ctlr->bits_per_word_mask = SPI_BPW_MASK(16) | SPI_BPW_MASK(8);
+	}
 
 	base = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
 	if (IS_ERR(base)) {

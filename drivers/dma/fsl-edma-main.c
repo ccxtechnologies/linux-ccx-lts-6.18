@@ -47,7 +47,7 @@ static irqreturn_t fsl_edma_tx_handler(int irq, void *dev_id)
 			edma_writeb(fsl_edma, EDMA_CINT_CINT(ch), regs->cint);
 
 			if (fsl_edma->drvdata->flags & FSL_EDMA_DRV_A011218) {
-				if (ch != EDMA_A011218_RX_CHAN || ch != EDMA_A011218_TX_CHAN) {
+				if (ch != EDMA_A011218_RX_CHAN && ch != EDMA_A011218_TX_CHAN) {
 					fsl_edma_tx_chan_handler(&fsl_edma->chans[ch]);
 				}
 			} else
@@ -227,7 +227,7 @@ static irqreturn_t fsl_edma_err_handler(int irq, void *dev_id)
 			edma_writeb(fsl_edma, EDMA_CERR_CERR(ch), regs->cerr);
 
 			if (fsl_edma->drvdata->flags & FSL_EDMA_DRV_A011218) {
-				if (ch != EDMA_A011218_RX_CHAN || ch != EDMA_A011218_TX_CHAN) {
+				if (ch != EDMA_A011218_RX_CHAN && ch != EDMA_A011218_TX_CHAN) {
 					fsl_edma_err_chan_handler(&fsl_edma->chans[ch]);
 				}
 			} else
@@ -857,10 +857,19 @@ static int fsl_edma_probe(struct platform_device *pdev)
 				return PTR_ERR(fsl_chan->clk);
 		}
 		fsl_chan->pdev = pdev;
+
 		vchan_init(&fsl_chan->vchan, &fsl_edma->dma_dev);
 
 		edma_write_tcdreg(fsl_chan, cpu_to_le32(0), csr);
-		fsl_edma_chan_mux(fsl_chan, 0, false);
+
+		if ((drvdata->flags & FSL_EDMA_DRV_A011218) &&
+		    (i == EDMA_A011218_RX_CHAN ||
+		     i == EDMA_A011218_TX_CHAN))
+			fsl_edma->chan_masked |= BIT(i);
+
+		if (!(fsl_edma->chan_masked & BIT(i)))
+			fsl_edma_chan_mux(fsl_chan, 0, false);
+
 		if (fsl_chan->edma->drvdata->flags & FSL_EDMA_DRV_HAS_CHCLK)
 			clk_disable_unprepare(fsl_chan->clk);
 	}

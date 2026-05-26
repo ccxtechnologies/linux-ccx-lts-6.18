@@ -1138,41 +1138,6 @@ static void dspi_log_hardware_state(struct fsl_dspi *dspi, struct fsl_dspi_dma *
 	regmap_read(dspi->regmap, SPI_SR, &sr);
 	regmap_read(dspi->regmap, SPI_RSER, &rser);
 	regmap_read(dspi->regmap, SPI_SREX, &srex);
-
-	dev_info(dev, "========== DSPI DATA LOG ==========\n");
-	dev_info(dev, "SPI_MCR   (0x00) : 0x%08x\n", mcr);
-	dev_info(dev, "SPI_TCR   (0x08) : 0x%08x\n", tcr);
-
-	for (i = 0; i < max_ctar; i++) {
-		regmap_read(dspi->regmap, SPI_CTAR(i), &ctar[i]);
-		dev_info(dev, "SPI_CTAR%d  (0x%02x) : 0x%08x\n", i, 0x0c + (i * 4), ctar[i]);
-	}
-
-	for (i = 0; i < max_ctar; i++) {
-		regmap_read(dspi->regmap, SPI_CTARE(i), &ctare[i]);
-		dev_info(dev, "SPI_CTARE%d (0x%03x): 0x%08x\n", i, 0x11c + (i * 4), ctare[i]);
-	}
-
-	dev_info(dev, "SPI_SR    (0x2c) : 0x%08x\n", sr);
-	dev_info(dev, "SPI_RSER  (0x30) : 0x%08x\n", rser);
-
-	for (i = 0; i < max_fifo; i++) {
-		regmap_read(dspi->regmap, SPI_TXFR0 + (i * 4), &txfr[i]);
-		dev_info(dev, "SPI_TXFR%d  (0x%02x) : 0x%08x\n", i, 0x3c + (i * 4), txfr[i]);
-	}
-
-	for (i = 0; i < max_fifo; i++) {
-		regmap_read(dspi->regmap, SPI_RXFR0 + (i * 4), &rxfr[i]);
-		dev_info(dev, "SPI_RXFR%d  (0x%02x) : 0x%08x\n", i, 0x7c + (i * 4), rxfr[i]);
-	}
-
-	dev_info(dev, "SPI_SREX  (0x13c): 0x%08x\n", srex);
-
-	dev_info(dev, "--- DMA TX Buffer Dump ---\n");
-	for (i = 0; i < dspi->words_in_flight; i++) {
-		dev_info(dev, "DMA_TX[%d]: 0x%08x\n", i, be32_to_cpu(dma->tx_dma_buf[i]));
-	}
-	dev_info(dev, "===================================\n");
 }
 
 static int dspi_transfer_one_message_dma(struct spi_controller *ctlr,

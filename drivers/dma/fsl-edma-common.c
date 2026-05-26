@@ -434,10 +434,12 @@ static void fsl_edma_set_tcd_regs(struct fsl_edma_chan *fsl_chan, void *tcd)
 			dummy_phys = fsl_chan->edma->dummy_rx_phys;
 			dummy_chan = fsl_chan;
 			fsl_chan = &fsl_chan->edma->chans[EDMA_A011218_RX_CHAN];
+			fsl_chan->edma->orig_rx_chan = dummy_chan;
 		} else if (fsl_chan->srcid == EDMA_A011218_TX_SLOT) {
 			dummy_phys = fsl_chan->edma->dummy_tx_phys;
 			dummy_chan = fsl_chan;
 			fsl_chan = &fsl_chan->edma->chans[EDMA_A011218_TX_CHAN];
+			fsl_chan->edma->orig_tx_chan = dummy_chan;
 		}
 	}
 
@@ -482,12 +484,15 @@ static void fsl_edma_set_tcd_regs(struct fsl_edma_chan *fsl_chan, void *tcd)
 		(csr & EDMA_TCD_CSR_E_LINK)))
 		edma_writel_chreg(fsl_chan, edma_readl_chreg(fsl_chan, ch_csr), ch_csr);
 
-
 	edma_cp_tcd_to_reg(fsl_chan, tcd, csr);
 
 	if (dummy_chan != NULL) {
 		u16 dummy_citer = fsl_edma_get_tcd_to_cpu(fsl_chan, tcd, citer);
 		u16 dummy_biter = fsl_edma_get_tcd_to_cpu(fsl_chan, tcd, biter);
+		u16 dummy_csr = csr & ~(EDMA_TCD_CSR_INT_MAJOR |
+				EDMA_TCD_CSR_INT_HALF |
+				EDMA_TCD_CSR_E_SG);
+
 
 		edma_write_tcdreg(dummy_chan, 0, csr);
 
@@ -501,23 +506,24 @@ static void fsl_edma_set_tcd_regs(struct fsl_edma_chan *fsl_chan, void *tcd)
 		edma_write_tcdreg(dummy_chan, 0, slast);
 
 		edma_write_tcdreg(dummy_chan,
+				cpu_to_le16(dummy_citer |
+					EDMA_TCD_CITER_LINK(fsl_chan->vchan.chan.chan_id)),
+				citer);
+		edma_write_tcdreg(dummy_chan,
 				cpu_to_le16(dummy_biter |
 					EDMA_TCD_BITER_LINK(fsl_chan->vchan.chan.chan_id)),
 				biter);
 
-		edma_write_tcdreg(dummy_chan,
-				cpu_to_le16(dummy_citer |
-					EDMA_TCD_CITER_LINK(fsl_chan->vchan.chan.chan_id)),
-				citer);
 
 		edma_write_tcdreg(dummy_chan, 0, doff);
 		edma_write_tcdreg(dummy_chan, 0, dlast_sga);
 
 		edma_write_tcdreg(dummy_chan,
-				cpu_to_le16(csr |
+				cpu_to_le16(dummy_csr |
 					EDMA_TCD_CSR_LINK(fsl_chan->vchan.chan.chan_id)),
 				csr);
 	}
+
 }
 
 static inline
@@ -755,15 +761,6 @@ struct dma_async_tx_descriptor *fsl_edma_prep_slave_sg(
 			soff = fsl_chan->cfg.dst_addr_width;
 			doff = 0;
 
-			/* DEBUG: Map the physical address to virtual and dump the first 4 bytes */
-			{
-				void *virt_addr = phys_to_virt(src_addr);
-				if (virt_addr) {
-					u32 *data = (u32 *)virt_addr;
-					printk(KERN_ERR "EDMA TX Dump [chan %d]: fifo=%pad, sg_len=%u, saddr=%pad, data=0x%08x\n",
-					       fsl_chan->vchan.chan.chan_id, &fsl_chan->dma_dev_addr, sg_dma_len(sg), &src_addr, *data);
-				}
-			}
 		} else if (direction == DMA_DEV_TO_MEM) {
 			src_addr = fsl_chan->dma_dev_addr;
 			dst_addr = sg_dma_address(sg);
@@ -856,42 +853,12 @@ void fsl_edma_xfer_desc(struct fsl_edma_chan *fsl_chan)
 	fsl_edma_enable_request(fsl_chan);
 	fsl_chan->status = DMA_IN_PROGRESS;
 
-	/* DEBUG: Dump EVERY single hardware TCD register for the active channel */
-	printk(KERN_ERR "EDMA HW TCD FULL [chan %d]: saddr=0x%08x soff=0x%04x attr=0x%04x nbytes=%u slast=0x%08x daddr=0x%08x doff=0x%04x citer=%u biter=%u dlast_sga=0x%08x csr=0x%04x\n",
-	       fsl_chan->vchan.chan.chan_id,
-	       edma_read_tcdreg(fsl_chan, saddr),
-	       edma_read_tcdreg(fsl_chan, soff),
-	       edma_read_tcdreg(fsl_chan, attr),
-	       edma_read_tcdreg(fsl_chan, nbytes),
-	       edma_read_tcdreg(fsl_chan, slast),
-	       edma_read_tcdreg(fsl_chan, daddr),
-	       edma_read_tcdreg(fsl_chan, doff),
-	       edma_read_tcdreg(fsl_chan, citer),
-	       edma_read_tcdreg(fsl_chan, biter),
-	       edma_read_tcdreg(fsl_chan, dlast_sga),
-	       edma_read_tcdreg(fsl_chan, csr));
-
 	if (fsl_chan->edma->drvdata->flags & FSL_EDMA_DRV_A011218) {
 		struct fsl_edma_chan *main_chan;
 		if (fsl_chan->srcid == EDMA_A011218_RX_SLOT)
 			main_chan = &fsl_chan->edma->chans[EDMA_A011218_RX_CHAN];
 		else
 			main_chan = &fsl_chan->edma->chans[EDMA_A011218_TX_CHAN];
-
-		/* DEBUG: Dump EVERY single hardware TCD register for the hardware workaround channel */
-		printk(KERN_ERR "EDMA HW MAIN FULL [chan %d]: saddr=0x%08x soff=0x%04x attr=0x%04x nbytes=%u slast=0x%08x daddr=0x%08x doff=0x%04x citer=%u biter=%u dlast_sga=0x%08x csr=0x%04x\n",
-		       main_chan->vchan.chan.chan_id,
-		       edma_read_tcdreg(main_chan, saddr),
-		       edma_read_tcdreg(main_chan, soff),
-		       edma_read_tcdreg(main_chan, attr),
-		       edma_read_tcdreg(main_chan, nbytes),
-		       edma_read_tcdreg(main_chan, slast),
-		       edma_read_tcdreg(main_chan, daddr),
-		       edma_read_tcdreg(main_chan, doff),
-		       edma_read_tcdreg(main_chan, citer),
-		       edma_read_tcdreg(main_chan, biter),
-		       edma_read_tcdreg(main_chan, dlast_sga),
-		       edma_read_tcdreg(main_chan, csr));
 	}
 }
 

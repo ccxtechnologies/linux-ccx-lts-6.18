@@ -284,6 +284,8 @@ struct fsl_edma_engine {
 	dma_addr_t		dummy_rx_phys;
 	void			*dummy_tx;
 	dma_addr_t		dummy_tx_phys;
+	struct fsl_edma_chan	*orig_rx_chan;
+	struct fsl_edma_chan	*orig_tx_chan;
 
 	struct fsl_edma_chan	chans[] __counted_by(n_chans);
 };

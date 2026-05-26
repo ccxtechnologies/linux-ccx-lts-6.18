@@ -44,16 +44,22 @@ static irqreturn_t fsl_edma_tx_handler(int irq, void *dev_id)
 
 	for (ch = 0; ch < fsl_edma->n_chans; ch++) {
 		if (intr & (0x1 << ch)) {
+			struct fsl_edma_chan *target_chan;
 			edma_writeb(fsl_edma, EDMA_CINT_CINT(ch), regs->cint);
 
+			target_chan = &fsl_edma->chans[ch];
+
 			if (fsl_edma->drvdata->flags & FSL_EDMA_DRV_A011218) {
-				if (ch != EDMA_A011218_RX_CHAN && ch != EDMA_A011218_TX_CHAN) {
-					fsl_edma_tx_chan_handler(&fsl_edma->chans[ch]);
-				}
-			} else
-				fsl_edma_tx_chan_handler(&fsl_edma->chans[ch]);
+				if (ch == EDMA_A011218_RX_CHAN && fsl_edma->orig_rx_chan)
+					target_chan = fsl_edma->orig_rx_chan;
+				else if (ch == EDMA_A011218_TX_CHAN && fsl_edma->orig_tx_chan)
+					target_chan = fsl_edma->orig_tx_chan;
+			}
+			fsl_edma_tx_chan_handler(target_chan);
 		}
 	}
+
+
 	return IRQ_HANDLED;
 }
 
@@ -223,15 +229,19 @@ static irqreturn_t fsl_edma_err_handler(int irq, void *dev_id)
 
 	for (ch = 0; ch < fsl_edma->n_chans; ch++) {
 		if (err & (0x1 << ch)) {
+			struct fsl_edma_chan *target_chan;
 			fsl_edma_disable_request(&fsl_edma->chans[ch]);
 			edma_writeb(fsl_edma, EDMA_CERR_CERR(ch), regs->cerr);
 
+			target_chan = &fsl_edma->chans[ch];
+
 			if (fsl_edma->drvdata->flags & FSL_EDMA_DRV_A011218) {
-				if (ch != EDMA_A011218_RX_CHAN && ch != EDMA_A011218_TX_CHAN) {
-					fsl_edma_err_chan_handler(&fsl_edma->chans[ch]);
-				}
-			} else
-				fsl_edma_err_chan_handler(&fsl_edma->chans[ch]);
+				if (ch == EDMA_A011218_RX_CHAN && fsl_edma->orig_rx_chan)
+					target_chan = fsl_edma->orig_rx_chan;
+				else if (ch == EDMA_A011218_TX_CHAN && fsl_edma->orig_tx_chan)
+					target_chan = fsl_edma->orig_tx_chan;
+			}
+			fsl_edma_err_chan_handler(target_chan);
 		}
 	}
 	return IRQ_HANDLED;

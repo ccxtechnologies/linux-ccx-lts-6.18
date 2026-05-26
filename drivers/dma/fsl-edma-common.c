@@ -110,6 +110,19 @@ static void fsl_edma_enable_request(struct fsl_edma_chan *fsl_chan)
 	if (fsl_chan->edma->drvdata->flags & FSL_EDMA_DRV_WRAP_IO) {
 		edma_writeb(fsl_chan->edma, EDMA_SEEI_SEEI(ch), regs->seei);
 		edma_writeb(fsl_chan->edma, ch, regs->serq);
+
+		if (fsl_chan->edma->drvdata->flags & FSL_EDMA_DRV_A011218) {
+			if (fsl_chan == fsl_chan->edma->orig_rx_chan) {
+				edma_writeb(fsl_chan->edma, EDMA_SEEI_SEEI(EDMA_A011218_RX_CHAN),
+						regs->seei);
+				edma_writeb(fsl_chan->edma, EDMA_A011218_RX_CHAN, regs->serq);
+			} else if (fsl_chan == fsl_chan->edma->orig_tx_chan) {
+				edma_writeb(fsl_chan->edma,
+						EDMA_SEEI_SEEI(EDMA_A011218_TX_CHAN), regs->seei);
+				edma_writeb(fsl_chan->edma, EDMA_A011218_TX_CHAN, regs->serq);
+			}
+		}
+
 	} else {
 		/* ColdFire is big endian, and accesses natively
 		 * big endian I/O peripherals

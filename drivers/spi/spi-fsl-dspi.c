@@ -319,7 +319,7 @@ static const struct fsl_dspi_devtype_data devtype_data[] = {
 };
 
 struct fsl_dspi_dma {
-    struct mutex				lock;
+	struct mutex				lock;
 	size_t					buffer_size;
 
 	u32					*tx_dma_buf;
@@ -503,10 +503,21 @@ static int dspi_next_xfer_dma_submit(struct fsl_dspi *dspi)
 	struct fsl_dspi_dma *dma = dspi->dma;
 	enum dma_status rx_status;
 	dma_cookie_t rx_cookie;
+	u32 val = 0;
+
+	/* Put DSPI in running mode if halted. */
+	regmap_read(dspi->regmap, SPI_MCR, &val);
+	if (val & SPI_MCR_HALT) {
+		regmap_update_bits(dspi->regmap, SPI_MCR, SPI_MCR_HALT, 0);
+		while (regmap_read(dspi->regmap, SPI_SR, &val) >= 0 &&
+		       !(val & SPI_SR_TXRXS))
+			;
+	}
 
 	rx_desc = dmaengine_prep_slave_single(dma->chan_rx, dma->rx_dma_phys,
 					dspi->words_in_flight * DMA_SLAVE_BUSWIDTH_4_BYTES,
-					DMA_DEV_TO_MEM, DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
+					DMA_DEV_TO_MEM,
+					DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
 	if (!rx_desc) {
 		dev_err(dev, "Not able to get desc for DMA xfer\n");
 		return -EIO;
@@ -525,7 +536,8 @@ static int dspi_next_xfer_dma_submit(struct fsl_dspi *dspi)
 
 	tx_desc = dmaengine_prep_slave_single(dma->chan_tx, dma->tx_dma_phys,
 					dspi->words_in_flight * DMA_SLAVE_BUSWIDTH_4_BYTES,
-					DMA_MEM_TO_DEV, DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
+					DMA_MEM_TO_DEV,
+					DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
 	if (!tx_desc) {
 		dev_err(dev, "Not able to get desc for DMA xfer\n");
 		return -EIO;
@@ -550,6 +562,14 @@ static int dspi_next_xfer_dma_submit(struct fsl_dspi *dspi)
 			break;
 	}
 
+	/* Put DSPI in stop mode */
+	regmap_update_bits(dspi->regmap, SPI_MCR,
+			   SPI_MCR_HALT, SPI_MCR_HALT);
+	while (regmap_read(dspi->regmap, SPI_SR, &val) >= 0 &&
+	       val & SPI_SR_TXRXS)
+		;
+
+
 	return 0;
 }
 
@@ -565,7 +585,7 @@ static int dspi_request_dma(struct fsl_dspi *dspi, phys_addr_t phy_addr)
 		return -ENOMEM;
 
 	dma->buffer_size = 256 * sizeof(u32);
-    mutex_init(&dma->lock);
+	mutex_init(&dma->lock);
 
 	dma->chan_rx = dma_request_chan(dev, "rx");
 	if (IS_ERR(dma->chan_rx))
@@ -1123,23 +1143,6 @@ static int dspi_transfer_one_message_fifo(struct spi_controller *ctlr,
 	return message->status;
 }
 
-static void dspi_log_hardware_state(struct fsl_dspi *dspi, struct fsl_dspi_dma *dma)
-{
-	struct device *dev = &dspi->pdev->dev;
-	u32 mcr, tcr, sr, rser, srex;
-	u32 ctar[6], ctare[6], txfr[5], rxfr[5];
-	int i, max_ctar, max_fifo;
-
-	max_ctar = is_s32g_dspi(dspi) ? 6 : 4;
-	max_fifo = is_s32g_dspi(dspi) ? 5 : 4;
-
-	regmap_read(dspi->regmap, SPI_MCR, &mcr);
-	regmap_read(dspi->regmap, SPI_TCR, &tcr);
-	regmap_read(dspi->regmap, SPI_SR, &sr);
-	regmap_read(dspi->regmap, SPI_RSER, &rser);
-	regmap_read(dspi->regmap, SPI_SREX, &srex);
-}
-
 static int dspi_transfer_one_message_dma(struct spi_controller *ctlr,
 					 struct spi_message *message)
 {
@@ -1150,32 +1153,26 @@ static int dspi_transfer_one_message_dma(struct spi_controller *ctlr,
 	struct spi_transfer *transfer;
 	int status = 0, i, offset, bytes_per_word, num_words;
 	u16 cmd, end_cmd;
-	u32 val;
 
-    mutex_lock(&dma->lock);
+	mutex_lock(&dma->lock);
 
 	message->actual_length = 0;
 	dspi->words_in_flight = 0;
+
 	dspi->cur_msg = message;
 	dspi->cur_chip = spi_get_ctldata(spi);
 
-	/* Bring controller out of HALT state */
-	regmap_read(dspi->regmap, SPI_MCR, &val);
-	if (val & SPI_MCR_HALT) {
-		regmap_update_bits(dspi->regmap, SPI_MCR, SPI_MCR_HALT, 0);
-		while (regmap_read(dspi->regmap, SPI_SR, &val) >= 0 &&
-		       !(val & SPI_SR_TXRXS))
-			;
-	}
-
 	regmap_write(dspi->regmap, SPI_CTAR(0),
-			 dspi->cur_chip->ctar_val | SPI_FRAME_BITS(8));
+			 dspi->cur_chip->ctar_val |
+			 SPI_FRAME_BITS(8));
 
 	regmap_write(dspi->regmap, SPI_CTAR(1),
-			 dspi->cur_chip->ctar_val | SPI_FRAME_BITS(16));
+			 dspi->cur_chip->ctar_val |
+			 SPI_FRAME_BITS(16));
 
 	offset = 0;
 	list_for_each_entry(transfer, &message->transfers, transfer_list) {
+
 		if ((offset + transfer->len) > (dma->buffer_size / sizeof(u32))) {
 			dev_err(dev, "Maximum transfer SPI DMA size is %zu\n",
 					dma->buffer_size / sizeof(u32));
@@ -1238,8 +1235,6 @@ static int dspi_transfer_one_message_dma(struct spi_controller *ctlr,
 			   SPI_MCR_CLR_TXF | SPI_MCR_CLR_RXF,
 			   SPI_MCR_CLR_TXF | SPI_MCR_CLR_RXF);
 
-    dspi_log_hardware_state(dspi, dma);
-
 	status = dspi_next_xfer_dma_submit(dspi);
 	if (status) {
 		dev_err(dev, "DMA transfer failed\n");
@@ -1266,12 +1261,8 @@ static int dspi_transfer_one_message_dma(struct spi_controller *ctlr,
 	}
 
 out:
-	/* Return controller to HALT state */
-	regmap_update_bits(dspi->regmap, SPI_MCR, SPI_MCR_HALT, SPI_MCR_HALT);
-	while (regmap_read(dspi->regmap, SPI_SR, &val) >= 0 && val & SPI_SR_TXRXS)
-		;
 
-    mutex_unlock(&dma->lock);
+	mutex_unlock(&dma->lock);
 
 	message->status = status;
 	spi_finalize_current_message(ctlr);

@@ -736,6 +736,7 @@
 				     <GIC_SPI 103 IRQ_TYPE_LEVEL_HIGH>;
 			interrupt-names = "edma-tx", "edma-err";
 			dma-channels = <32>;
+			dma-noncoherent;
 			big-endian;
 			clock-names = "dmamux0", "dmamux1";
 			clocks = <&clockgen QORIQ_CLK_PLATFORM_PLL

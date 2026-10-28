@@ -43,7 +43,7 @@ config REGMAP_SLIMBUS
 	depends on SLIMBUS
 
 config REGMAP_SPI
-	tristate
+	tristate "Regmap SPI"
 	depends on SPI
 
 config REGMAP_SPMI

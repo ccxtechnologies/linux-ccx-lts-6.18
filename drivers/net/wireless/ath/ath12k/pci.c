@@ -1208,6 +1208,10 @@ u32 ath12k_pci_read32(struct ath12k_base *ab, u32 offset)
 	u32 val, window_start;
 	int ret = 0;
 
+	/* Guard MMIO reads during driver teardown. */
+	if (test_bit(ATH12K_FLAG_UNREGISTERING, &ab->dev_flags))
+			return ~0U;
+
 	/* for offset beyond BAR + 4K - 32, may
 	 * need to wakeup MHI to access.
 	 */

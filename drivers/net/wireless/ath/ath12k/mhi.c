@@ -298,6 +298,15 @@ static int ath12k_mhi_op_read_reg(struct mhi_controller *mhi_cntrl,
 				  void __iomem *addr,
 				  u32 *out)
 {
+
+	struct ath12k_base *ab = dev_get_drvdata(mhi_cntrl->cntrl_dev);
+
+	/* Guard MMIO reads during driver teardown. */
+	if (test_bit(ATH12K_FLAG_UNREGISTERING, &ab->dev_flags)) {
+			*out = 0xFFFFFFFF;
+			return 0;
+	}
+
 	*out = readl(addr);
 
 	return 0;
